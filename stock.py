@@ -3,106 +3,121 @@ import yfinance as yf
 import plotly.graph_objects as go
 import pandas as pd
 
-# 1. 網頁基本設定 (預設為寬版，套用深色主題感)
+# 1. 網頁基本設定
 st.set_page_config(
-    page_title="即時股票儀表板",
-    page_icon="📈",
+    page_title="台股即時搜尋儀表板",
+    page_icon="🔍",
     layout="wide"
 )
 
-# 2. 預設觀察清單 (您可以隨時增刪)
-TICKERS = {
-    "0050.TW": "元大台灣50",
-    "0052.TW": "富邦科技",
-    "00631L.TW": "元大台灣50正2",
-    "00935.TW": "野村臺灣新科技50",
-    "VOO": "Vanguard 標普500 ETF",
-    "2317.TW": "鴻海",
-    "2382.TW": "廣達",
-    "3231.TW": "緯創",
-    "2637.TW": "慧洋-KY"
-}
+# 2. 側邊欄搜尋介面
+st.sidebar.title("🔍 搜尋台股")
+st.sidebar.write("請輸入純數字代號即可，系統會自動判斷上市/上櫃。")
 
-# 3. 側邊欄設計 (選單)
-st.sidebar.title("📊 儀表板設定")
-selected_symbol = st.sidebar.selectbox(
-    "請選擇標的", 
-    options=list(TICKERS.keys()), 
-    format_func=lambda x: f"{x} ({TICKERS[x]})"
-)
+# 讓使用者自由輸入代號，預設帶入 0050
+search_input = st.sidebar.text_input(
+    "股票代號 (如: 0050, 2330)", 
+    value="0050"
+).strip().upper()
+
 period = st.sidebar.selectbox("選擇走勢圖區間", ["1mo", "3mo", "6mo", "1y", "ytd"], index=0)
 
-# 4. 抓取真實數據函數 (使用快取避免重複讀取)
-@st.cache_data(ttl=300) # 快取 5 分鐘
-def load_data(symbol, period):
-    stock = yf.Ticker(symbol)
-    hist = stock.history(period=period)
-    return stock.info, hist
+st.sidebar.markdown("---")
+st.sidebar.write("💡 **快速測試代號參考**")
+st.sidebar.caption(
+    "大盤與ETF: 0050, 0052, 00631L, 00935\n\n"
+    "AI與硬體供應鏈: 3515, 2382, 3231, 2317, 3037\n\n"
+    "航運與其他: 2637, 6781"
+)
 
-# 讀取資料
-with st.spinner("抓取最新報價中..."):
-    info, hist = load_data(selected_symbol, period)
+# 3. 智慧抓取函數：自動處理 .TW (上市) 與 .TWO (上櫃)
+@st.cache_data(ttl=300) # 快取 5 分鐘，避免頻繁發送請求
+def fetch_taiwan_stock(stock_code, period):
+    # 如果使用者自己打了後綴，就直接用
+    if stock_code.endswith(".TW") or stock_code.endswith(".TWO"):
+        tickers_to_try = [stock_code]
+    else:
+        # 否則先試上市 (.TW)，找不到再試上櫃 (.TWO)
+        tickers_to_try = [f"{stock_code}.TW", f"{stock_code}.TWO"]
+        
+    for ticker in tickers_to_try:
+        stock = yf.Ticker(ticker)
+        # 嘗試取得歷史資料來確認標的是否存在
+        hist = stock.history(period=period)
+        if not hist.empty:
+            return stock, ticker, hist
+            
+    # 如果都找不到，回傳空值
+    return None, None, pd.DataFrame()
 
-if not hist.empty:
-    # 5. 計算今日與昨日數據
-    current_price = hist['Close'].iloc[-1]
-    prev_price = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
-    
-    price_change = current_price - prev_price
-    pct_change = (price_change / prev_price) * 100
-    
-    today_open = hist['Open'].iloc[-1]
-    today_high = hist['High'].iloc[-1]
-    today_low = hist['Low'].iloc[-1]
-    volume = hist['Volume'].iloc[-1]
+# 4. 畫面渲染邏輯
+if search_input:
+    with st.spinner(f"正在搜尋 {search_input} 的最新報價..."):
+        stock, actual_ticker, hist = fetch_taiwan_stock(search_input, period)
 
-    # 6. 主畫面頂部：大標題與主報價
-    st.markdown(f"## {selected_symbol} {TICKERS[selected_symbol]}")
-    st.metric(
-        label="目前股價 (即時/收盤)", 
-        value=f"{current_price:.2f}", 
-        delta=f"{price_change:.2f} ({pct_change:.2f}%)"
-    )
-    
-    st.divider()
+    if not hist.empty:
+        # 取得公司名稱 (若抓不到預設顯示代號)
+        info = stock.info
+        short_name = info.get('shortName', actual_ticker)
+        
+        # 計算今日與昨日數據
+        current_price = hist['Close'].iloc[-1]
+        prev_price = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
+        
+        price_change = current_price - prev_price
+        pct_change = (price_change / prev_price) * 100
+        
+        today_open = hist['Open'].iloc[-1]
+        today_high = hist['High'].iloc[-1]
+        today_low = hist['Low'].iloc[-1]
+        volume = hist['Volume'].iloc[-1]
 
-    # 7. 主畫面中段：四宮格數據 (還原您設計圖的版型)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric(label="開盤價", value=f"{today_open:.2f}")
-    with col2:
-        st.metric(label="昨收價", value=f"{prev_price:.2f}")
-    with col3:
-        st.metric(label="最高價", value=f"{today_high:.2f}")
-    with col4:
-        st.metric(label="最低價", value=f"{today_low:.2f}")
-    
-    st.metric(label="總成交量", value=f"{volume:,.0f}")
-    st.divider()
+        # 主畫面頂部：顯示代號、名稱與主報價
+        st.markdown(f"## {actual_ticker} {short_name}")
+        st.metric(
+            label="目前股價 (即時/收盤)", 
+            value=f"{current_price:.2f}", 
+            delta=f"{price_change:.2f} ({pct_change:.2f}%)"
+        )
+        
+        st.divider()
 
-    # 8. 主畫面下段：互動式 K 線圖
-    st.subheader(f"走勢圖 (區間: {period})")
-    
-    fig = go.Figure(data=[go.Candlestick(
-        x=hist.index,
-        open=hist['Open'],
-        high=hist['High'],
-        low=hist['Low'],
-        close=hist['Close'],
-        name="K線",
-        increasing_line_color='#26a69a', # 上漲綠色 (可依喜好調整，美股預設綠漲紅跌)
-        decreasing_line_color='#ef5350'  # 下跌紅色
-    )])
-    
-    # 調整圖表外觀為深色模式
-    fig.update_layout(
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark",
-        margin=dict(l=0, r=0, t=20, b=0),
-        height=450
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
+        # 主畫面中段：四宮格數據
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric(label="開盤價", value=f"{today_open:.2f}")
+        with col2:
+            st.metric(label="昨收價", value=f"{prev_price:.2f}")
+        with col3:
+            st.metric(label="最高價", value=f"{today_high:.2f}")
+        with col4:
+            st.metric(label="最低價", value=f"{today_low:.2f}")
+        
+        st.metric(label="總成交量", value=f"{volume:,.0f}")
+        st.divider()
 
-else:
-    st.error("無法取得該檔股票的資料，請檢查代碼或稍後再試。")
+        # 主畫面下段：互動式 K 線圖
+        st.subheader(f"走勢圖 (區間: {period})")
+        
+        fig = go.Figure(data=[go.Candlestick(
+            x=hist.index,
+            open=hist['Open'],
+            high=hist['High'],
+            low=hist['Low'],
+            close=hist['Close'],
+            name="K線",
+            increasing_line_color='#ef5350', # 台股習慣：上漲紅色
+            decreasing_line_color='#26a69a'  # 台股習慣：下跌綠色
+        )])
+        
+        fig.update_layout(
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark",
+            margin=dict(l=0, r=0, t=20, b=0),
+            height=450
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        st.error(f"找不到代號為 '{search_input}' 的股票，請確認代號是否正確。")

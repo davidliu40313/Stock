@@ -14,7 +14,6 @@ st.set_page_config(
 st.sidebar.title("🔍 搜尋台股")
 st.sidebar.write("請輸入純數字代號即可，系統會自動判斷上市/上櫃。")
 
-# 讓使用者自由輸入代號，預設帶入 0050
 search_input = st.sidebar.text_input(
     "股票代號 (如: 0050, 2330)", 
     value="0050"
@@ -30,36 +29,36 @@ st.sidebar.caption(
     "航運與其他: 2637, 6781"
 )
 
-# 3. 智慧抓取函數：自動處理 .TW (上市) 與 .TWO (上櫃)
-@st.cache_data(ttl=300) # 快取 5 分鐘，避免頻繁發送請求
+# 3. 智慧抓取函數 (修正快取序列化問題)
+@st.cache_data(ttl=300) 
 def fetch_taiwan_stock(stock_code, period):
-    # 如果使用者自己打了後綴，就直接用
     if stock_code.endswith(".TW") or stock_code.endswith(".TWO"):
         tickers_to_try = [stock_code]
     else:
-        # 否則先試上市 (.TW)，找不到再試上櫃 (.TWO)
         tickers_to_try = [f"{stock_code}.TW", f"{stock_code}.TWO"]
         
     for ticker in tickers_to_try:
         stock = yf.Ticker(ticker)
-        # 嘗試取得歷史資料來確認標的是否存在
         hist = stock.history(period=period)
         if not hist.empty:
-            return stock, ticker, hist
+            # 在這裡先把字串拿出來，不要回傳 Ticker 物件
+            try:
+                short_name = stock.info.get('shortName', ticker)
+            except:
+                short_name = ticker
             
-    # 如果都找不到，回傳空值
-    return None, None, pd.DataFrame()
+            # 只回傳可序列化的資料：字串、字串、DataFrame
+            return short_name, ticker, hist
+            
+    return "", None, pd.DataFrame()
 
 # 4. 畫面渲染邏輯
 if search_input:
     with st.spinner(f"正在搜尋 {search_input} 的最新報價..."):
-        stock, actual_ticker, hist = fetch_taiwan_stock(search_input, period)
+        # 接收回傳的字串與 DataFrame
+        short_name, actual_ticker, hist = fetch_taiwan_stock(search_input, period)
 
     if not hist.empty:
-        # 取得公司名稱 (若抓不到預設顯示代號)
-        info = stock.info
-        short_name = info.get('shortName', actual_ticker)
-        
         # 計算今日與昨日數據
         current_price = hist['Close'].iloc[-1]
         prev_price = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
@@ -106,8 +105,8 @@ if search_input:
             low=hist['Low'],
             close=hist['Close'],
             name="K線",
-            increasing_line_color='#ef5350', # 台股習慣：上漲紅色
-            decreasing_line_color='#26a69a'  # 台股習慣：下跌綠色
+            increasing_line_color='#ef5350', # 上漲紅色
+            decreasing_line_color='#26a69a'  # 下跌綠色
         )])
         
         fig.update_layout(
